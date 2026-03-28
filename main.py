@@ -24,16 +24,96 @@ def _box_to_rect(box) -> list[float]:
     ]
 
 
-def pdf_to_images(pdf_path: str) -> list[tuple[int, bytes, int, int]]:
-    """Convert PDF pages to PNG images. Returns list of (page_index, png_bytes, width, height)."""
-    doc = fitz.open(pdf_path)
-    pages = []
-    for i in range(len(doc)):
-        page = doc.load_page(i)
-        pix = page.get_pixmap(dpi=150)
-        pages.append((i, pix.tobytes("png"), pix.width, pix.height))
-    doc.close()
-    return pages
+# 텍스트 레이어가 이 정도면 OCR 대신 사용 (스캔본은 보통 비어 있음)
+_MIN_TEXT_LAYER_CHARS = 40
+_MIN_TEXT_LAYER_WORDS = 3
+
+
+def _page_to_image_bbox(
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    page_rect: fitz.Rect,
+    img_w: int,
+    img_h: int,
+) -> list[float]:
+    """PDF 페이지 좌표 → 렌더된 PNG 픽셀 좌표."""
+    rw, rh = page_rect.width, page_rect.height
+    if rw <= 0 or rh <= 0:
+        return [0.0, 0.0, 0.0, 0.0]
+    return [
+        x0 * img_w / rw,
+        y0 * img_h / rh,
+        x1 * img_w / rw,
+        y1 * img_h / rh,
+    ]
+
+
+def _extract_text_layer_texts(
+    page: fitz.Page,
+    img_w: int,
+    img_h: int,
+) -> list[dict] | None:
+    """
+    임베디드 텍스트 레이어에서 단어/줄 단위 bbox 추출.
+    내용이 거의 없으면 None (OCR 폴백).
+    """
+    plain = page.get_text("text").strip()
+    words = page.get_text("words")
+    if len(plain) < _MIN_TEXT_LAYER_CHARS and len(words) < _MIN_TEXT_LAYER_WORDS:
+        return None
+
+    rect = page.rect
+    out: list[dict] = []
+
+    if words:
+        for w in words:
+            x0, y0, x1, y1, text, *_rest = w
+            t = (text or "").strip()
+            if not t:
+                continue
+            bbox = _page_to_image_bbox(float(x0), float(y0), float(x1), float(y1), rect, img_w, img_h)
+            out.append({"text": t, "score": 1.0, "bbox": bbox})
+
+    if not out and plain:
+        td = page.get_text("dict")
+        for block in td.get("blocks", []):
+            if block.get("type") == 1:
+                continue
+            for line in block.get("lines", []):
+                bbox = line.get("bbox")
+                if not bbox:
+                    continue
+                x0, y0, x1, y1 = bbox
+                txt = "".join(s.get("text", "") for s in line.get("spans", [])).strip()
+                if not txt:
+                    continue
+                bb = _page_to_image_bbox(x0, y0, x1, y1, rect, img_w, img_h)
+                out.append({"text": txt, "score": 1.0, "bbox": bb})
+
+    return out if out else None
+
+
+def _paddle_ocr_lang() -> str:
+    return os.environ.get("PADDLE_OCR_LANG", "korean")
+
+
+def _run_ocr_on_image(ocr: PaddleOCR, image_path: Path) -> list[dict]:
+    result = ocr.ocr(str(image_path), cls=False)
+    page_texts: list[dict] = []
+    if result and result[0]:
+        for line in result[0]:
+            if line:
+                box, (text, score) = line
+                if text.strip():
+                    bbox = _box_to_rect(box)
+                    page_texts.append({
+                        "text": text,
+                        "score": float(score),
+                        "bbox": bbox,
+                    })
+    return page_texts
 
 
 def _resolve_paddle_device(explicit: str | None) -> str | None:
@@ -54,44 +134,42 @@ def _resolve_paddle_device(explicit: str | None) -> str | None:
 
 def ocr_pdf(pdf_path: str, device: str | None = None) -> list[dict]:
     """
-    Perform OCR on a PDF file. Returns list of page results.
-    Each page result: {"page": int, "texts": list[{"text": str, "score": float}]}
-    device: None 또는 'auto'면 PaddleOCR 기본(가능하면 GPU, 아니면 CPU).
+    PDF 페이지별로 임베디드 텍스트 레이어를 우선 사용하고, 없거나 빈 경우에만 OCR.
+    Each page result: {"page", "texts", "width", "height", "image"}
     """
     _device = _resolve_paddle_device(device)
-    # PIR↔oneDNN 버그 회피: CPU 폴백 시에도 MKLDNN 경로 회피
-    ocr = PaddleOCR(
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-        return_word_box=True,
-        device=_device,
-        lang="korean",
-        enable_mkldnn=False,
-    )
+    _lang = _paddle_ocr_lang()
+    ocr: PaddleOCR | None = None
 
-    pages = pdf_to_images(pdf_path)
-    results = []
+    def get_ocr() -> PaddleOCR:
+        nonlocal ocr
+        if ocr is None:
+            ocr = PaddleOCR(
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                return_word_box=True,
+                device=_device,
+                lang=_lang,
+                enable_mkldnn=False,
+            )
+        return ocr
+
+    results: list[dict] = []
+    doc = fitz.open(pdf_path)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        for page_idx, png_bytes, img_w, img_h in pages:
-            tmp_path = Path(tmpdir) / f"page_{page_idx}.png"
-            tmp_path.write_bytes(png_bytes)
+        for page_idx in range(len(doc)):
+            page = doc.load_page(page_idx)
+            pix = page.get_pixmap(dpi=150)
+            png_bytes = pix.tobytes("png")
+            img_w, img_h = pix.width, pix.height
 
-            result = ocr.ocr(str(tmp_path), cls=False)
-            page_texts = []
-
-            if result and result[0]:
-                for line in result[0]:
-                    if line:
-                        box, (text, score) = line
-                        if text.strip():
-                            bbox = _box_to_rect(box)
-                            page_texts.append({
-                                "text": text,
-                                "score": float(score),
-                                "bbox": bbox,
-                            })
+            page_texts = _extract_text_layer_texts(page, img_w, img_h)
+            if page_texts is None:
+                tmp_path = Path(tmpdir) / f"page_{page_idx}.png"
+                tmp_path.write_bytes(png_bytes)
+                page_texts = _run_ocr_on_image(get_ocr(), tmp_path)
 
             results.append({
                 "page": page_idx + 1,
@@ -101,6 +179,7 @@ def ocr_pdf(pdf_path: str, device: str | None = None) -> list[dict]:
                 "texts": page_texts,
             })
 
+    doc.close()
     return results
 
 
