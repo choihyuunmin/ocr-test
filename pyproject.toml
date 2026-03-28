@@ -8,6 +8,7 @@ dependencies = [
     "paddleocr>=2.7.3,<2.8",
     "paddlepaddle-gpu>=2.6.0,<3.0",
     "numpy>=1.23,<2.0",
+    "setuptools>=65.0",
     "PyMuPDF>=1.24",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
