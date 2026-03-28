@@ -42,7 +42,8 @@ def ocr_pdf(pdf_path: str, device: str | None = None) -> list[dict]:
     Each page result: {"page": int, "texts": list[{"text": str, "score": float}]}
     """
     _device = device or os.environ.get("PADDLE_OCR_DEVICE") or "cpu"
-    ocr = PaddleOCR(
+    # PaddlePaddle 3.3+ CPU: PIR↔oneDNN 변환 버그 회피 (onednn_instruction.cc NotImplementedError)
+    ocr_kw: dict = dict(
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
@@ -50,6 +51,9 @@ def ocr_pdf(pdf_path: str, device: str | None = None) -> list[dict]:
         device=_device,
         lang="korean",
     )
+    if not str(_device).lower().startswith("gpu"):
+        ocr_kw["enable_mkldnn"] = False
+    ocr = PaddleOCR(**ocr_kw)
 
     pages = pdf_to_images(pdf_path)
     results = []
