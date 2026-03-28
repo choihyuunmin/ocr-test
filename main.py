@@ -42,18 +42,17 @@ def ocr_pdf(pdf_path: str, device: str | None = None) -> list[dict]:
     Each page result: {"page": int, "texts": list[{"text": str, "score": float}]}
     """
     _device = device or os.environ.get("PADDLE_OCR_DEVICE") or "cpu"
-    # PaddlePaddle 3.3+ CPU: PIR↔oneDNN 변환 버그 회피 (onednn_instruction.cc NotImplementedError)
-    ocr_kw: dict = dict(
+    # PIR↔oneDNN 버그 회피: device가 gpu여도 GPU 미사용 시 CPU+MKLDNN로 떨어지며 동일 오류가 남.
+    # GPU 추론에는 MKLDNN을 쓰지 않으므로 항상 끔.
+    ocr = PaddleOCR(
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
         return_word_box=True,
         device=_device,
         lang="korean",
+        enable_mkldnn=False,
     )
-    if not str(_device).lower().startswith("gpu"):
-        ocr_kw["enable_mkldnn"] = False
-    ocr = PaddleOCR(**ocr_kw)
 
     pages = pdf_to_images(pdf_path)
     results = []
