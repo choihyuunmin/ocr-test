@@ -1,5 +1,6 @@
 """OCR 뷰어 웹 서버 (FastAPI)."""
 
+import argparse
 import os
 import tempfile
 from pathlib import Path
@@ -39,6 +40,28 @@ async def run_ocr(file: UploadFile = File(...)):
         Path(tmp_path).unlink(missing_ok=True)
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="OCR 뷰어 서버")
+    p.add_argument(
+        "--gpu-id",
+        type=int,
+        default=1,
+        metavar="N",
+        help="사용할 CUDA GPU 인덱스 (0=첫 번째, 1=두 번째, …). 기본: 1",
+    )
+    p.add_argument("--cpu", action="store_true", help="CPU로 OCR 실행")
+    p.add_argument("--host", default="0.0.0.0", help="바인드 주소 (기본: 0.0.0.0)")
+    p.add_argument("--port", type=int, default=8000, help="포트 (기본: 8000)")
+    return p.parse_args()
+
+
 if __name__ == "__main__":
+    args = _parse_args()
+    if args.cpu:
+        os.environ["PADDLE_OCR_DEVICE"] = "cpu"
+    else:
+        os.environ["PADDLE_OCR_DEVICE"] = f"gpu:{args.gpu_id}"
+
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(app, host=args.host, port=args.port)
