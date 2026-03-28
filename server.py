@@ -33,8 +33,7 @@ async def run_ocr(file: UploadFile = File(...)):
         tmp_path = f.name
 
     try:
-        device = os.environ.get("PADDLE_OCR_DEVICE", "cpu")
-        pages = ocr_pdf(tmp_path, device=device)
+        pages = ocr_pdf(tmp_path)
         return {"pages": pages}
     finally:
         Path(tmp_path).unlink(missing_ok=True)
@@ -43,13 +42,11 @@ async def run_ocr(file: UploadFile = File(...)):
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="OCR 뷰어 서버")
     p.add_argument(
-        "--gpu-id",
-        type=int,
-        default=1,
-        metavar="N",
-        help="사용할 CUDA GPU 인덱스 (0=첫 번째, 1=두 번째, …). 기본: 1",
+        "--device",
+        default="auto",
+        metavar="STR",
+        help="auto(기본) | cpu | gpu:N — auto는 CUDA 가능 시 첫 GPU, 아니면 CPU",
     )
-    p.add_argument("--cpu", action="store_true", help="CPU로 OCR 실행")
     p.add_argument("--host", default="0.0.0.0", help="바인드 주소 (기본: 0.0.0.0)")
     p.add_argument("--port", type=int, default=8000, help="포트 (기본: 8000)")
     return p.parse_args()
@@ -57,10 +54,11 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = _parse_args()
-    if args.cpu:
-        os.environ["PADDLE_OCR_DEVICE"] = "cpu"
+    dev = args.device.strip()
+    if dev.lower() == "auto":
+        os.environ.pop("PADDLE_OCR_DEVICE", None)
     else:
-        os.environ["PADDLE_OCR_DEVICE"] = f"gpu:{args.gpu_id}"
+        os.environ["PADDLE_OCR_DEVICE"] = dev
 
     import uvicorn
 

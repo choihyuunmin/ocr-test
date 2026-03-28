@@ -36,14 +36,30 @@ def pdf_to_images(pdf_path: str) -> list[tuple[int, bytes, int, int]]:
     return pages
 
 
+def _resolve_paddle_device(explicit: str | None) -> str | None:
+    """None / auto → Paddle 기본값(CUDA 가능 시 gpu:0, 아니면 cpu)."""
+    if explicit is not None:
+        s = explicit.strip()
+        if not s or s.lower() == "auto":
+            return None
+        return s
+    env = os.environ.get("PADDLE_OCR_DEVICE")
+    if env is None:
+        return None
+    s = env.strip()
+    if not s or s.lower() == "auto":
+        return None
+    return s
+
+
 def ocr_pdf(pdf_path: str, device: str | None = None) -> list[dict]:
     """
     Perform OCR on a PDF file. Returns list of page results.
     Each page result: {"page": int, "texts": list[{"text": str, "score": float}]}
+    device: None 또는 'auto'면 PaddleOCR 기본(가능하면 GPU, 아니면 CPU).
     """
-    _device = device or os.environ.get("PADDLE_OCR_DEVICE") or "cpu"
-    # PIR↔oneDNN 버그 회피: device가 gpu여도 GPU 미사용 시 CPU+MKLDNN로 떨어지며 동일 오류가 남.
-    # GPU 추론에는 MKLDNN을 쓰지 않으므로 항상 끔.
+    _device = _resolve_paddle_device(device)
+    # PIR↔oneDNN 버그 회피: CPU 폴백 시에도 MKLDNN 경로 회피
     ocr = PaddleOCR(
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
@@ -129,7 +145,12 @@ def ocr_pdf(pdf_path: str, device: str | None = None) -> list[dict]:
 def main():
     parser = argparse.ArgumentParser(description="PDF OCR using PaddleOCR")
     parser.add_argument("pdf_path", help="Path to PDF file")
-    parser.add_argument("--gpu", action="store_true", help="Use GPU if available (device=gpu:0)")
+    parser.add_argument(
+        "--device",
+        default="auto",
+        metavar="STR",
+        help="auto(기본) | cpu | gpu:N — auto는 CUDA 있으면 gpu:0, 없으면 cpu",
+    )
     parser.add_argument(
         "--output",
         "-o",
@@ -143,8 +164,8 @@ def main():
     )
     args = parser.parse_args()
 
-    device = "gpu:0" if args.gpu else os.environ.get("PADDLE_OCR_DEVICE") or "cpu"
-    results = ocr_pdf(args.pdf_path, device=device)
+    dev = args.device.strip()
+    results = ocr_pdf(args.pdf_path, device=None if dev.lower() == "auto" else dev)
 
     if args.json:
         out = args.output or "ocr_result.json"
