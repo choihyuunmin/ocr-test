@@ -78,58 +78,20 @@ def ocr_pdf(pdf_path: str, device: str | None = None) -> list[dict]:
             tmp_path = Path(tmpdir) / f"page_{page_idx}.png"
             tmp_path.write_bytes(png_bytes)
 
-            output = ocr.predict(str(tmp_path))
+            result = ocr.ocr(str(tmp_path), cls=False)
             page_texts = []
 
-            for res in output:
-                if isinstance(res, dict):
-                    res_data = res.get("res", res)
-                else:
-                    res_data = getattr(res, "res", None)
-                    if res_data is None:
-                        res_data = getattr(res, "model_dump", lambda: None)()
-                    if res_data is None:
-                        res_data = vars(res) if hasattr(res, "__dict__") else {}
-                if not isinstance(res_data, dict):
-                    res_data = {}
-                rec_texts = res_data.get("rec_texts")
-                if rec_texts is None:
-                    rec_texts = getattr(res, "rec_texts", None)
-                if rec_texts is None:
-                    rec_texts = []
-
-                rec_scores = res_data.get("rec_scores")
-                if rec_scores is None:
-                    rec_scores = getattr(res, "rec_scores", None)
-                if rec_scores is None:
-                    rec_scores = []
-
-                rec_boxes = res_data.get("rec_boxes")
-                if rec_boxes is None:
-                    rec_boxes = res_data.get("rec_polys")
-                if rec_boxes is None:
-                    rec_boxes = getattr(res, "rec_boxes", None)
-                if rec_boxes is None:
-                    rec_boxes = getattr(res, "rec_polys", None)
-                if rec_boxes is None:
-                    rec_boxes = []
-
-                rec_texts = list(rec_texts)
-                rec_scores = list(rec_scores)
-
-                for i, (text, score) in enumerate(zip(rec_texts, rec_scores)):
-                    if text.strip():
-                        bbox = None
-                        if i < len(rec_boxes):
-                            try:
-                                bbox = _box_to_rect(rec_boxes[i])
-                            except Exception:
-                                pass
-                        page_texts.append({
-                            "text": text,
-                            "score": float(score),
-                            "bbox": bbox,
-                        })
+            if result and result[0]:
+                for line in result[0]:
+                    if line:
+                        box, (text, score) = line
+                        if text.strip():
+                            bbox = _box_to_rect(box)
+                            page_texts.append({
+                                "text": text,
+                                "score": float(score),
+                                "bbox": bbox,
+                            })
 
             results.append({
                 "page": page_idx + 1,
