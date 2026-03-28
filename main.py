@@ -1,0 +1,169 @@
+"""PDF OCR using PaddleOCR."""
+
+import argparse
+import os
+import base64
+import json
+import tempfile
+from pathlib import Path
+
+import fitz  # PyMuPDF
+from paddleocr import PaddleOCR
+
+
+def _box_to_rect(box) -> list[float]:
+    """Convert 4-point box to [xmin, ymin, xmax, ymax]."""
+    import numpy as np
+
+    arr = np.array(box).reshape(-1, 2)
+    return [
+        float(arr[:, 0].min()),
+        float(arr[:, 1].min()),
+        float(arr[:, 0].max()),
+        float(arr[:, 1].max()),
+    ]
+
+
+def pdf_to_images(pdf_path: str) -> list[tuple[int, bytes, int, int]]:
+    """Convert PDF pages to PNG images. Returns list of (page_index, png_bytes, width, height)."""
+    doc = fitz.open(pdf_path)
+    pages = []
+    for i in range(len(doc)):
+        page = doc.load_page(i)
+        pix = page.get_pixmap(dpi=150)
+        pages.append((i, pix.tobytes("png"), pix.width, pix.height))
+    doc.close()
+    return pages
+
+
+def ocr_pdf(pdf_path: str, device: str | None = None) -> list[dict]:
+    """
+    Perform OCR on a PDF file. Returns list of page results.
+    Each page result: {"page": int, "texts": list[{"text": str, "score": float}]}
+    """
+    _device = device or os.environ.get("PADDLE_OCR_DEVICE") or "cpu"
+    ocr = PaddleOCR(
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        return_word_box=True,
+        device=_device,
+        lang="korean",
+    )
+
+    pages = pdf_to_images(pdf_path)
+    results = []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for page_idx, png_bytes, img_w, img_h in pages:
+            tmp_path = Path(tmpdir) / f"page_{page_idx}.png"
+            tmp_path.write_bytes(png_bytes)
+
+            output = ocr.predict(str(tmp_path))
+            page_texts = []
+
+            for res in output:
+                if isinstance(res, dict):
+                    res_data = res.get("res", res)
+                else:
+                    res_data = getattr(res, "res", None)
+                    if res_data is None:
+                        res_data = getattr(res, "model_dump", lambda: None)()
+                    if res_data is None:
+                        res_data = vars(res) if hasattr(res, "__dict__") else {}
+                if not isinstance(res_data, dict):
+                    res_data = {}
+                rec_texts = res_data.get("rec_texts")
+                if rec_texts is None:
+                    rec_texts = getattr(res, "rec_texts", None)
+                if rec_texts is None:
+                    rec_texts = []
+
+                rec_scores = res_data.get("rec_scores")
+                if rec_scores is None:
+                    rec_scores = getattr(res, "rec_scores", None)
+                if rec_scores is None:
+                    rec_scores = []
+
+                rec_boxes = res_data.get("rec_boxes")
+                if rec_boxes is None:
+                    rec_boxes = res_data.get("rec_polys")
+                if rec_boxes is None:
+                    rec_boxes = getattr(res, "rec_boxes", None)
+                if rec_boxes is None:
+                    rec_boxes = getattr(res, "rec_polys", None)
+                if rec_boxes is None:
+                    rec_boxes = []
+
+                rec_texts = list(rec_texts)
+                rec_scores = list(rec_scores)
+
+                for i, (text, score) in enumerate(zip(rec_texts, rec_scores)):
+                    if text.strip():
+                        bbox = None
+                        if i < len(rec_boxes):
+                            try:
+                                bbox = _box_to_rect(rec_boxes[i])
+                            except Exception:
+                                pass
+                        page_texts.append({
+                            "text": text,
+                            "score": float(score),
+                            "bbox": bbox,
+                        })
+
+            results.append({
+                "page": page_idx + 1,
+                "image": base64.b64encode(png_bytes).decode(),
+                "width": img_w,
+                "height": img_h,
+                "texts": page_texts,
+            })
+
+    return results
+
+
+def main():
+    parser = argparse.ArgumentParser(description="PDF OCR using PaddleOCR")
+    parser.add_argument("pdf_path", help="Path to PDF file")
+    parser.add_argument("--gpu", action="store_true", help="Use GPU if available (device=gpu:0)")
+    parser.add_argument(
+        "--output",
+        "-o",
+        help="Output text file path (default: print to stdout)",
+    )
+    parser.add_argument(
+        "--json",
+        "-j",
+        help="Output as JSON (for viewer). Use with -o.",
+        action="store_true",
+    )
+    args = parser.parse_args()
+
+    device = "gpu:0" if args.gpu else os.environ.get("PADDLE_OCR_DEVICE") or "cpu"
+    results = ocr_pdf(args.pdf_path, device=device)
+
+    if args.json:
+        out = args.output or "ocr_result.json"
+        data = {"pages": results}
+        Path(out).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"OCR 결과(JSON)가 {out}에 저장되었습니다.")
+    else:
+        output_lines = []
+        for page_result in results:
+            output_lines.append(f"--- Page {page_result['page']} ---")
+            for item in page_result["texts"]:
+                output_lines.append(item["text"])
+            output_lines.append("")
+
+        output_text = "\n".join(output_lines)
+
+        if args.output:
+            Path(args.output).write_text(output_text, encoding="utf-8")
+            print(f"OCR 결과가 {args.output}에 저장되었습니다.")
+        else:
+            print(output_text)
+
+
+if __name__ == "__main__":
+    main()

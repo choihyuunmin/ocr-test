@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCR 뷰어 - 단어 검색</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --bg-elevated: #161922;
+      --surface: #1c2130;
+      --border: #2f3545;
+      --text: #e8eaf4;
+      --muted: #8b92a8;
+      --accent: #6ea8ff;
+      --accent-soft: rgba(110, 168, 255, 0.22);
+      --match-other: #3dd6b4;
+      --match-other-fill: rgba(61, 214, 180, 0.18);
+      --match-active: #ffc53d;
+      --match-active-fill: rgba(255, 197, 61, 0.35);
+      --danger-soft: rgba(248, 113, 113, 0.15);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Pretendard", "Noto Sans KR", -apple-system, BlinkMacSystemFont, sans-serif;
+      background: radial-gradient(1200px 600px at 50% -10%, rgba(110, 168, 255, 0.08), transparent 55%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: linear-gradient(180deg, rgba(22, 25, 34, 0.98) 0%, rgba(22, 25, 34, 0.92) 100%);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      padding: 0.875rem 1.5rem;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+    }
+
+    .file-input-wrap {
+      position: relative;
+    }
+    .file-input-wrap input[type="file"] {
+      position: absolute;
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+    }
+    .btn {
+      padding: 0.55rem 1rem;
+      background: var(--accent);
+      color: #0a0c12;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+    .btn:hover:not(:disabled) {
+      box-shadow: 0 4px 14px rgba(110, 168, 255, 0.35);
+    }
+    .btn:active:not(:disabled) { transform: scale(0.98); }
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .btn-nav {
+      min-width: 3.25rem;
+      padding-left: 0.5rem;
+      padding-right: 0.5rem;
+      font-size: 0.8125rem;
+    }
+
+    .search-panel {
+      flex: 1;
+      min-width: 240px;
+      max-width: 520px;
+      display: flex;
+      align-items: stretch;
+      gap: 0.5rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.35rem 0.5rem 0.35rem 0.75rem;
+    }
+    .search-panel:focus-within {
+      border-color: rgba(110, 168, 255, 0.55);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .search-icon {
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .search-icon svg { width: 18px; height: 18px; opacity: 0.85; }
+    .search-wrap-inner {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-width: 0;
+    }
+    .search-wrap-inner input {
+      flex: 1;
+      min-width: 0;
+      padding: 0.45rem 0.25rem;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    .search-wrap-inner input:focus { outline: none; }
+    .search-wrap-inner input::placeholder { color: var(--muted); }
+    .search-wrap-inner input:disabled { opacity: 0.5; }
+
+    .match-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.35rem 0.65rem;
+      border-radius: 8px;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+    }
+    .match-badge.has-results {
+      border-color: rgba(61, 214, 180, 0.45);
+      background: rgba(61, 214, 180, 0.1);
+      color: #b8f5e8;
+    }
+    .match-badge.no-results {
+      border-color: rgba(248, 113, 113, 0.35);
+      background: var(--danger-soft);
+      color: #fecaca;
+    }
+    .match-badge:empty { display: none; }
+    .match-badge .sep { opacity: 0.45; font-weight: 400; }
+    .match-hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+      width: 100%;
+      flex-basis: 100%;
+      margin: -0.25rem 0 0;
+      padding-left: 0.25rem;
+    }
+    @media (min-width: 720px) {
+      .match-hint { display: none; }
+    }
+
+    .content {
+      padding: 1.75rem 1.5rem 3rem;
+      max-width: 920px;
+      margin: 0 auto;
+    }
+
+    .page-card {
+      background: var(--surface);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 1.75rem;
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .page-card.highlight {
+      border-color: rgba(255, 197, 61, 0.65);
+      box-shadow: 0 0 0 2px rgba(255, 197, 61, 0.25), 0 12px 40px rgba(0, 0, 0, 0.35);
+    }
+    .page-header {
+      padding: 0.6rem 1.1rem;
+      background: linear-gradient(90deg, rgba(110, 168, 255, 0.08), transparent);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+      border-bottom: 1px solid var(--border);
+    }
+    .page-body {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+    }
+    .page-img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      vertical-align: top;
+    }
+    .page-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    .word-box {
+      position: absolute;
+      border: 2px solid transparent;
+      background: transparent;
+      border-radius: 3px;
+      transition: opacity 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+    }
+    .word-box.dim { opacity: 0.2; }
+    .word-box.match {
+      border-color: var(--match-other);
+      background: var(--match-other-fill);
+      box-shadow: 0 0 0 1px rgba(61, 214, 180, 0.35);
+    }
+    .word-box.match-active {
+      border-color: var(--match-active);
+      background: var(--match-active-fill);
+      box-shadow: 0 0 0 2px rgba(255, 197, 61, 0.55), 0 0 20px rgba(255, 197, 61, 0.25);
+      z-index: 2;
+      animation: pulse-ring 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse-ring {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(255, 197, 61, 0.55), 0 0 20px rgba(255, 197, 61, 0.2); }
+      50% { box-shadow: 0 0 0 3px rgba(255, 197, 61, 0.75), 0 0 28px rgba(255, 197, 61, 0.35); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .word-box.match-active { animation: none; }
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 4rem 2rem;
+      color: var(--muted);
+      max-width: 28rem;
+      margin: 0 auto;
+    }
+    .empty-state p { margin: 0.5rem 0; line-height: 1.6; }
+    .empty-state .lead {
+      font-size: 1.125rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .loading { opacity: 0.6; pointer-events: none; }
+    .loading-msg { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="file-input-wrap">
+      <button class="btn" id="uploadBtn">PDF 업로드</button>
+      <input type="file" id="fileInput" accept=".pdf">
+    </div>
+    <div class="search-panel" id="searchPanel">
+      <span class="search-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+      </span>
+      <div class="search-wrap-inner">
+        <input type="search" id="searchInput" placeholder="문서에서 검색…" autocomplete="off" disabled>
+        <button type="button" class="btn btn-nav" id="prevBtn" disabled title="이전 일치 (Shift+Enter)">이전</button>
+        <button type="button" class="btn btn-nav" id="nextBtn" disabled title="다음 일치 (Enter)">다음</button>
+      </div>
+    </div>
+    <span class="match-badge" id="matchBadge" aria-live="polite"></span>
+    <p class="match-hint">Enter: 다음 · Shift+Enter: 이전</p>
+  </header>
+
+  <main class="content" id="content">
+    <div class="empty-state">
+      <p class="lead">PDF를 업로드하면 OCR 결과가 여기에 표시됩니다.</p>
+      <p>검색어를 입력하면 일치하는 단어가 강조되고, 화살표 버튼으로 순서대로 이동할 수 있습니다.</p>
+    </div>
+  </main>
+
+  <script>
+    let data = null;
+    let matches = [];
+    let currentMatchIndex = -1;
+
+    const uploadBtn = document.getElementById('uploadBtn');
+    const fileInput = document.getElementById('fileInput');
+    const searchInput = document.getElementById('searchInput');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const matchBadge = document.getElementById('matchBadge');
+    const content = document.getElementById('content');
+
+    uploadBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      content.classList.add('loading');
+      content.innerHTML = '<div class="empty-state loading-msg"><p>OCR 처리 중...</p></div>';
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/ocr', {
+          method: 'POST',
+          body: formData,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          const msg = Array.isArray(err.detail) ? err.detail[0]?.msg : err.detail;
+          throw new Error(msg || res.statusText || 'OCR 처리 실패');
+        }
+        data = await res.json();
+        content.classList.remove('loading');
+        render();
+        searchInput.disabled = false;
+      } catch (err) {
+        content.classList.remove('loading');
+        content.innerHTML = `<div class="empty-state"><p>오류: ${err.message}</p></div>`;
+      }
+      fileInput.value = '';
+    });
+
+    function render() {
+      if (!data?.pages?.length) {
+        content.innerHTML = '<div class="empty-state"><p>유효한 OCR 데이터가 없습니다.</p></div>';
+        return;
+      }
+
+      content.innerHTML = data.pages.map((page, i) => {
+        const imgSrc = page.image ? `data:image/png;base64,${page.image}` : '';
+        const w = page.width || 800;
+        const h = page.height || 600;
+        const boxes = (page.texts || []).map((t, textIdx) => {
+          const b = t.bbox;
+          if (!b || b.length < 4) return '';
+          const [x1, y1, x2, y2] = b;
+          return `<div class="word-box" data-page="${i}" data-text-idx="${textIdx}" data-text="${escapeHtml(t.text)}" 
+            style="left:${x1}px;top:${y1}px;width:${x2-x1}px;height:${y2-y1}px"></div>`;
+        }).join('');
+        return `
+          <div class="page-card" id="page-${i}" data-page-index="${i}">
+            <div class="page-header">페이지 ${page.page}</div>
+            <div class="page-body" data-natural-w="${w}" data-natural-h="${h}">
+              <img class="page-img" src="${imgSrc}" alt="Page ${page.page}">
+              <div class="page-overlay" style="width:${w}px;height:${h}px">${boxes}</div>
+            </div>
+          </div>`;
+      }).join('');
+
+      document.querySelectorAll('.page-body').forEach(body => {
+        const img = body.querySelector('.page-img');
+        const overlay = body.querySelector('.page-overlay');
+        if (!img || !overlay) return;
+        img.onload = () => {
+          const r = img.getBoundingClientRect();
+          const scale = r.width / img.naturalWidth;
+          overlay.style.transform = `scale(${scale})`;
+          overlay.style.transformOrigin = 'top left';
+          overlay.style.width = img.naturalWidth + 'px';
+          overlay.style.height = img.naturalHeight + 'px';
+        };
+        if (img.complete) img.onload();
+      });
+
+      doSearch();
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML.replace(/"/g, '&quot;');
+    }
+
+    function doSearch() {
+      const q = searchInput.value.trim().toLowerCase();
+      matches = [];
+      currentMatchIndex = -1;
+
+      document.querySelectorAll('.word-box').forEach(box => {
+        box.classList.remove('dim', 'match', 'match-active');
+        box.style.display = '';
+      });
+      document.querySelectorAll('.page-card').forEach(c => c.classList.remove('highlight'));
+
+      if (!q || !data?.pages) {
+        matchBadge.textContent = '';
+        matchBadge.className = 'match-badge';
+        prevBtn.disabled = nextBtn.disabled = true;
+        return;
+      }
+
+      data.pages.forEach((page, pageIdx) => {
+        (page.texts || []).forEach((t, i) => {
+          if (t.text.toLowerCase().includes(q)) {
+            matches.push({ pageIdx, textIdx: i, text: t.text });
+          }
+        });
+      });
+
+      document.querySelectorAll('.word-box').forEach(box => {
+        const text = box.dataset.text || '';
+        if (text.toLowerCase().includes(q)) {
+          box.classList.add('match');
+        } else {
+          box.classList.add('dim');
+        }
+      });
+
+      if (matches.length > 0) {
+        currentMatchIndex = 0;
+        goToMatch(0);
+        prevBtn.disabled = nextBtn.disabled = false;
+      } else {
+        matchBadge.textContent = '검색 결과 없음';
+        matchBadge.className = 'match-badge no-results';
+        prevBtn.disabled = nextBtn.disabled = true;
+      }
+    }
+
+    function goToMatch(idx) {
+      if (idx < 0 || idx >= matches.length) return;
+      currentMatchIndex = idx;
+      const m = matches[idx];
+
+      document.querySelectorAll('.word-box').forEach(b => b.classList.remove('match-active'));
+      const activeBox = document.querySelector(
+        `.word-box[data-page="${m.pageIdx}"][data-text-idx="${m.textIdx}"]`
+      );
+      if (activeBox) activeBox.classList.add('match-active');
+
+      const card = document.getElementById(`page-${m.pageIdx}`);
+      if (card) {
+        document.querySelectorAll('.page-card').forEach(c => c.classList.remove('highlight'));
+        card.classList.add('highlight');
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      matchBadge.className = 'match-badge has-results';
+      matchBadge.innerHTML =
+        '<span>' + (idx + 1) + '</span><span class="sep">/</span><span>' + matches.length + '</span>';
+    }
+
+    searchInput.addEventListener('input', () => doSearch());
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        if (e.shiftKey) goToMatch(currentMatchIndex - 1);
+        else goToMatch(currentMatchIndex + 1);
+      }
+    });
+    prevBtn.addEventListener('click', () => goToMatch(currentMatchIndex - 1));
+    nextBtn.addEventListener('click', () => goToMatch(currentMatchIndex + 1));
+  </script>
+</body>
+</html>
