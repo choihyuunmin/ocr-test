@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import tempfile
@@ -15,7 +16,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse, urlunparse
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -154,12 +155,87 @@ def index():
     return FileResponse(BASE / "static" / "viewer.html")
 
 
+def _navigate_response(pages: list[Any], meta: dict[str, Any]) -> dict[str, Any]:
+    payload = {"pages": pages, "navigate": meta}
+    token = str(uuid.uuid4())
+    with _STORE_LOCK:
+        _clean_expired()
+        _SESSIONS[token] = (payload, time.time())
+    return {
+        "token": token,
+        "query": f"token={token}",
+        "viewer_path": f"/?token={token}",
+        "expires_in": TTL_SEC,
+    }
+
+
+async def _ocr_pdf_bytes(raw: bytes, meta: dict[str, Any]) -> dict[str, Any]:
+    if len(raw) > _MAX_PDF_BYTES:
+        raise HTTPException(413, "PDF 용량이 제한을 초과했습니다.")
+    fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+    try:
+        os.write(fd, raw)
+        os.close(fd)
+        fd = -1
+        pages = await asyncio.to_thread(ocr_pdf, tmp_path)
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        Path(tmp_path).unlink(missing_ok=True)
+    return _navigate_response(pages, meta)
+
+
 @app.post("/api/navigate")
-async def api_navigate(body: NavigateIn):
+async def api_navigate(request: Request):
     """
-    PDF URL을 받아 OCR 후 세션에 저장하고 token 을 반환합니다.
-    뷰어: GET /?token={token}
+    - multipart/form-data: `file`(PDF) + `filename`, `page`, `article_title`, `bbox`(JSON 문자열)
+      → 브라우저가 PDF를 직접 넘기면 ocr-test가 외부 URL로 재다운로드하지 않음.
+    - application/json: 기존처럼 `pdf_url` 등 (서버에서 httpx로 PDF 수신)
     """
+    ct = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in ct:
+        form = await request.form()
+        uploaded = form.get("file")
+        if uploaded is None:
+            raise HTTPException(400, "multipart 요청에는 file 필드가 필요합니다.")
+        if not hasattr(uploaded, "read"):
+            raise HTTPException(400, "유효한 파일 업로드가 아닙니다.")
+        raw = await uploaded.read()  # type: ignore[union-attr]
+        if not raw:
+            raise HTTPException(400, "빈 파일입니다.")
+        fn = str(form.get("filename") or "").strip()
+        if not fn:
+            fn = getattr(uploaded, "filename", None) or "document.pdf"
+        try:
+            page = max(1, int(form.get("page") or 1))
+        except (TypeError, ValueError):
+            page = 1
+        at = form.get("article_title")
+        article_title = str(at).strip() if at else None
+        bbox = None
+        bstr = form.get("bbox")
+        if bstr:
+            try:
+                bbox = json.loads(str(bstr))
+            except json.JSONDecodeError as e:
+                raise HTTPException(400, f"bbox JSON 오류: {e}") from e
+        meta = {
+            "filename": fn,
+            "page": page,
+            "pdf_url": None,
+            "article_title": article_title,
+            "bbox": bbox,
+        }
+        return await _ocr_pdf_bytes(raw, meta)
+
+    try:
+        data = await request.json()
+    except Exception as e:
+        raise HTTPException(400, "JSON 본문이 필요합니다.") from e
+    body = NavigateIn.model_validate(data)
     meta = body.normalized_navigate()
     pdf_url = meta.get("pdf_url") or ""
     if not pdf_url:
@@ -185,38 +261,11 @@ async def api_navigate(body: NavigateIn):
             502,
             f"PDF를 가져올 수 없습니다: {e!s} (요청 URL: {fetch_url!r}, "
             "ocr-test 서버에서 접근 가능한 주소인지 확인. "
-            "다른 호스트면 OCR_TEST_MOLEG_PDFS_ORIGIN=http://<moleg-app>:18000 설정)",
+            "다른 호스트면 OCR_TEST_MOLEG_PDFS_ORIGIN=http://<moleg-app>:18000 설정 "
+            "또는 클라이언트에서 multipart로 file을 보내세요.)",
         ) from e
 
-    if len(buf) > _MAX_PDF_BYTES:
-        raise HTTPException(413, "PDF 용량이 제한을 초과했습니다.")
-
-    fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
-    try:
-        os.write(fd, buf)
-        os.close(fd)
-        fd = -1
-        pages = await asyncio.to_thread(ocr_pdf, tmp_path)
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        Path(tmp_path).unlink(missing_ok=True)
-
-    payload = {"pages": pages, "navigate": meta}
-    token = str(uuid.uuid4())
-    with _STORE_LOCK:
-        _clean_expired()
-        _SESSIONS[token] = (payload, time.time())
-
-    return {
-        "token": token,
-        "query": f"token={token}",
-        "viewer_path": f"/?token={token}",
-        "expires_in": TTL_SEC,
-    }
+    return await _ocr_pdf_bytes(buf, meta)
 
 
 @app.get("/api/session/{token}")
