@@ -252,31 +252,41 @@
       left: 0;
       pointer-events: none;
     }
+    .text-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: auto;
+      -webkit-user-select: text;
+      user-select: text;
+      cursor: text;
+      color: transparent;
+      line-height: 1;
+      overflow: visible;
+      z-index: 1;
+    }
+    .text-layer span {
+      position: absolute;
+      white-space: pre;
+      color: transparent;
+      -webkit-user-select: text;
+      user-select: text;
+      display: inline-block;
+      pointer-events: auto;
+    }
+    .text-layer span::selection {
+      background: rgba(3, 105, 161, 0.3);
+      color: transparent;
+    }
     .word-box {
       position: absolute;
       border: 2px solid transparent;
       background: transparent;
       border-radius: 3px;
       transition: opacity 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
-      pointer-events: auto;
-      -webkit-user-select: text;
-      user-select: text;
-      cursor: text;
-    }
-    /* 이미지 위 OCR 텍스트 드래그 선택 (시각적으로는 이미지와 동일하게 보임) */
-    .word-box-text {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      color: transparent;
-      overflow: hidden;
-      white-space: nowrap;
-      line-height: 1;
-      -webkit-user-select: text;
-      user-select: text;
+      pointer-events: none;
     }
     .word-box.dim { opacity: 0.22; }
     .word-box.match {
@@ -378,23 +388,37 @@
         const imgSrc = page.image ? `data:image/png;base64,${page.image}` : '';
         const w = page.width || 800;
         const h = page.height || 600;
+        
+        const textSpans = (page.texts || []).map((t, textIdx) => {
+          const b = t.bbox;
+          if (!b || b.length < 4) return '';
+          const [x1, y1, x2, y2] = b;
+          const boxH = y2 - y1;
+          const boxW = x2 - x1;
+          const fs = Math.max(6, Math.round(boxH * 0.72));
+          const text = t.text || '';
+          return `<span data-page="${i}" data-text-idx="${textIdx}" 
+            style="left:${x1}px;top:${y1}px;width:${boxW}px;height:${boxH}px;font-size:${fs}px;line-height:${boxH}px">${escapeHtml(text)}</span>`;
+        }).join('');
+        
         const boxes = (page.texts || []).map((t, textIdx) => {
           const b = t.bbox;
           if (!b || b.length < 4) return '';
           const [x1, y1, x2, y2] = b;
-          const h = y2 - y1;
-          const fs = Math.max(6, Math.round(h * 0.72));
+          const boxH = y2 - y1;
           return `<div class="word-box" data-page="${i}" data-text-idx="${textIdx}" data-text="${escapeHtml(t.text)}" 
-            style="left:${x1}px;top:${y1}px;width:${x2-x1}px;height:${h}px">
-            <span class="word-box-text" style="font-size:${fs}px">${escapeHtml(t.text)}</span>
-          </div>`;
+            style="left:${x1}px;top:${y1}px;width:${x2-x1}px;height:${boxH}px"></div>`;
         }).join('');
+        
         return `
           <div class="page-card" id="page-${i}" data-page-index="${i}">
             <div class="page-header">페이지 ${page.page}</div>
             <div class="page-body" data-natural-w="${w}" data-natural-h="${h}">
               <img class="page-img" src="${imgSrc}" alt="Page ${page.page}">
-              <div class="page-overlay" style="width:${w}px;height:${h}px">${boxes}</div>
+              <div class="page-overlay" style="width:${w}px;height:${h}px">
+                <div class="text-layer">${textSpans}</div>
+                ${boxes}
+              </div>
             </div>
           </div>`;
       }).join('');
@@ -482,9 +506,9 @@
       return d.innerHTML.replace(/"/g, '&quot;');
     }
 
-    /** 검색 비교용: 공백 제거 + 대소문자 무시. 화면 표시 문자열은 건드리지 않음. */
+    /** 검색 비교용: 여러 공백을 하나로 + 대소문자 무시. 화면 표시 문자열은 건드리지 않음. */
     function normalizeForSearch(s) {
-      return String(s).toLowerCase().replace(/\s+/g, '');
+      return String(s).toLowerCase().replace(/\s+/g, ' ').trim();
     }
 
     /** bbox 기준 읽기 순서(위→아래, 같은 줄은 왼→오) */
@@ -511,17 +535,21 @@
     }
 
     /**
-     * 페이지 내 연속 OCR 단위를 공백 없이 이었을 때의 문자열과 구간.
+     * 페이지 내 연속 OCR 단위를 공백으로 이었을 때의 문자열과 구간.
      * 여러 박스에 나뉜 문구도 하나의 검색어로 찾을 수 있음.
      */
     function buildPageConcatNorm(page, order) {
       const texts = page.texts || [];
       let full = '';
       const segs = [];
-      for (const ti of order) {
+      for (let i = 0; i < order.length; i++) {
+        const ti = order[i];
         const n = normalizeForSearch(texts[ti].text || '');
-        segs.push({ ti, start: full.length, end: full.length + n.length });
+        if (!n) continue;
+        if (i > 0 && full) full += ' ';
+        const start = full.length;
         full += n;
+        segs.push({ ti, start: start, end: full.length });
       }
       return { fullNorm: full, segs };
     }
