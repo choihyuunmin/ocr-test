@@ -457,6 +457,8 @@
     }
 
     function applyNavigationHint(meta) {
+      document.querySelectorAll('.external-focus-rect').forEach(el => el.remove());
+      
       if (!meta || !data?.pages?.length) return;
       const targetPage = meta.page;
       const bbox = meta.bbox;
@@ -489,6 +491,12 @@
           el.style.width = Math.max(8, (bbox.x1 - bbox.x0) * w) + 'px';
           el.style.height = Math.max(8, (bbox.y1 - bbox.y0) * h) + 'px';
           overlay.appendChild(el);
+          
+          setTimeout(() => {
+            el.style.transition = 'opacity 0.3s ease';
+            el.style.opacity = '0';
+            setTimeout(() => el.remove(), 300);
+          }, 2000);
         }
       }
 
@@ -506,9 +514,9 @@
       return d.innerHTML.replace(/"/g, '&quot;');
     }
 
-    /** 검색 비교용: 여러 공백을 하나로 + 대소문자 무시. 화면 표시 문자열은 건드리지 않음. */
+    /** 검색 비교용: 공백 제거 + 대소문자 무시. 화면 표시 문자열은 건드리지 않음. */
     function normalizeForSearch(s) {
-      return String(s).toLowerCase().replace(/\s+/g, ' ').trim();
+      return String(s).toLowerCase().replace(/\s+/g, '');
     }
 
     /** bbox 기준 읽기 순서(위→아래, 같은 줄은 왼→오) */
@@ -535,7 +543,7 @@
     }
 
     /**
-     * 페이지 내 연속 OCR 단위를 공백으로 이었을 때의 문자열과 구간.
+     * 페이지 내 연속 OCR 단위를 공백 없이 이었을 때의 문자열과 구간.
      * 여러 박스에 나뉜 문구도 하나의 검색어로 찾을 수 있음.
      */
     function buildPageConcatNorm(page, order) {
@@ -546,7 +554,6 @@
         const ti = order[i];
         const n = normalizeForSearch(texts[ti].text || '');
         if (!n) continue;
-        if (i > 0 && full) full += ' ';
         const start = full.length;
         full += n;
         segs.push({ ti, start: start, end: full.length });
