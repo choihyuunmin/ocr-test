@@ -589,35 +589,20 @@
     }
 
     /**
-     * 칼럼 내 x 좌표가 비슷한 블록들을 그룹화 → 각 그룹 내에서 위→아래 정렬.
-     * 같은 문단의 여러 줄이 연속으로 이어지도록 함.
+     * 칼럼 내에서 위→아래, 같은 줄은 왼→오 정렬.
+     * 줄바꿈된 문단도 연속으로 이어지도록 y 우선 정렬.
      */
     function sortItemsReadingOrder(texts, items) {
       if (items.length === 0) return [];
       
-      const byX = [...items].sort((a, b) => a.x1 - b.x1);
-      const xGroups = [];
-      let currentGroup = [byX[0]];
-      const avgW = items.reduce((sum, it) => sum + (it.x2 - it.x1), 0) / items.length;
-      const xTol = Math.max(15, avgW * 0.3);
-      
-      for (let i = 1; i < byX.length; i++) {
-        const prev = currentGroup[currentGroup.length - 1];
-        if (Math.abs(byX[i].x1 - prev.x1) <= xTol) {
-          currentGroup.push(byX[i]);
-        } else {
-          xGroups.push(currentGroup);
-          currentGroup = [byX[i]];
+      items.sort((a, b) => {
+        if (Math.abs(a.ymid - b.ymid) > 5) {
+          return a.ymid - b.ymid;
         }
-      }
-      if (currentGroup.length > 0) xGroups.push(currentGroup);
+        return a.x1 - b.x1;
+      });
       
-      const result = [];
-      for (const grp of xGroups) {
-        grp.sort((a, b) => a.ymid - b.ymid);
-        result.push(...grp.map((it) => it.i));
-      }
-      return result;
+      return items.map((it) => it.i);
     }
 
     /**
@@ -634,9 +619,11 @@
         items.push({ i, ymid, x1: b[0], x2: b[2], xmid: (b[0] + b[2]) / 2 });
       }
       if (items.length === 0) return [];
+      
       const pageW = page.width || Math.max(0, ...items.map((it) => it.x2)) || 800;
-      const minColGap = Math.max(20, pageW * 0.035);
+      const minColGap = Math.max(30, pageW * 0.08);
       const byX = [...items].sort((a, b) => a.xmid - b.xmid);
+      
       let bestGap = 0;
       let splitJ = -1;
       for (let j = 0; j < byX.length - 1; j++) {
@@ -646,12 +633,20 @@
           splitJ = j;
         }
       }
+      
+      console.log(`[칼럼 분석] pageW=${Math.round(pageW)}, minColGap=${Math.round(minColGap)}, bestGap=${Math.round(bestGap)}, splitJ=${splitJ}`);
+      
       if (bestGap < minColGap || splitJ < 0) {
+        console.log(`[칼럼 분석] 단일 칼럼으로 처리`);
         return sortItemsReadingOrder(texts, items);
       }
+      
       const splitX = (byX[splitJ].xmid + byX[splitJ + 1].xmid) / 2;
       const left = items.filter((it) => it.xmid < splitX);
       const right = items.filter((it) => it.xmid >= splitX);
+      
+      console.log(`[칼럼 분석] 이중 칼럼: splitX=${Math.round(splitX)}, 왼쪽=${left.length}개, 오른쪽=${right.length}개`);
+      
       return [...sortItemsReadingOrder(texts, left), ...sortItemsReadingOrder(texts, right)];
     }
 
@@ -705,6 +700,25 @@
       data.pages.forEach((page, pageIdx) => {
         const order = readingOrderTextIndices(page);
         const { fullNorm, segs } = buildPageConcatNorm(page, order);
+        
+        console.group(`📄 Page ${pageIdx}`);
+        console.log(`🔍 검색어: "${searchInput.value}" → 정규화: "${q}"`);
+        console.log(`📝 OCR 텍스트 개수: ${page.texts?.length || 0}`);
+        console.log(`📋 읽기 순서 (처음 10개):`, order.slice(0, 10).map(ti => {
+          const t = page.texts[ti];
+          return `[${ti}] "${t.text}" @ (${Math.round(t.bbox[0])},${Math.round(t.bbox[1])})`;
+        }));
+        console.log(`🔤 fullNorm (처음 300자):`, fullNorm.substring(0, 300));
+        console.log(`🔤 fullNorm 전체 길이:`, fullNorm.length);
+        
+        const queryPos = fullNorm.indexOf(q);
+        if (queryPos >= 0) {
+          console.log(`✅ fullNorm에서 검색어 발견: 위치 ${queryPos}`);
+          console.log(`   주변 문맥: "${fullNorm.substring(Math.max(0, queryPos - 20), Math.min(fullNorm.length, queryPos + q.length + 20))}"`);
+        } else {
+          console.log(`❌ fullNorm에서 검색어 미발견`);
+        }
+        
         let pos = 0;
         while (pos <= fullNorm.length - q.length) {
           const hit = fullNorm.indexOf(q, pos);
@@ -713,10 +727,14 @@
           const textIndices = collectTextIndicesForRange(segs, hit, hitEnd);
           const primary = textIndices.length ? textIndices[0] : -1;
           const refText = primary >= 0 ? ((page.texts || [])[primary] || {}).text || '' : '';
+          
+          console.log(`🎯 일치 #${matches.length + 1}: pos=${hit}~${hitEnd}, textIndices=${textIndices}, refText="${refText}"`);
+          
           matches.push({ pageIdx, textIndices, textIdx: primary, text: refText });
           textIndices.forEach((ti) => matchedKey.add(`${pageIdx}:${ti}`));
           pos = hit + q.length;
         }
+        console.groupEnd();
       });
 
       document.querySelectorAll('.word-box').forEach(box => {
