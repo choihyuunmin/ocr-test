@@ -250,6 +250,15 @@
     }
     .loading { opacity: 0.6; pointer-events: none; }
     .loading-msg { color: var(--accent); }
+    .external-focus-rect {
+      position: absolute;
+      border: 3px solid var(--match-active);
+      background: var(--match-active-fill);
+      pointer-events: none;
+      z-index: 3;
+      box-shadow: 0 0 0 2px rgba(255, 197, 61, 0.35);
+      border-radius: 4px;
+    }
   </style>
 </head>
 <body>
@@ -349,22 +358,79 @@
           </div>`;
       }).join('');
 
+      const finishNavHint = () => {
+        const hint = window.__pendingNavHint;
+        window.__pendingNavHint = null;
+        if (hint) applyNavigationHint(hint);
+      };
+      let pendingImages = 0;
       document.querySelectorAll('.page-body').forEach(body => {
         const img = body.querySelector('.page-img');
         const overlay = body.querySelector('.page-overlay');
         if (!img || !overlay) return;
-        img.onload = () => {
+        pendingImages += 1;
+        const scale = () => {
           const r = img.getBoundingClientRect();
-          const scale = r.width / img.naturalWidth;
-          overlay.style.transform = `scale(${scale})`;
+          const sc = r.width / img.naturalWidth;
+          overlay.style.transform = `scale(${sc})`;
           overlay.style.transformOrigin = 'top left';
           overlay.style.width = img.naturalWidth + 'px';
           overlay.style.height = img.naturalHeight + 'px';
         };
-        if (img.complete) img.onload();
+        const done = () => {
+          scale();
+          if (--pendingImages <= 0) finishNavHint();
+        };
+        if (img.complete) done();
+        else img.addEventListener('load', done, { once: true });
       });
+      if (pendingImages === 0) finishNavHint();
 
       doSearch();
+    }
+
+    function applyNavigationHint(meta) {
+      if (!meta || !data?.pages?.length) return;
+      const targetPage = meta.page;
+      const bbox = meta.bbox;
+      const article = meta.article_title;
+
+      let pageIdx = 0;
+      if (targetPage != null) {
+        const found = data.pages.findIndex((p) => p.page === targetPage);
+        if (found >= 0) pageIdx = found;
+      }
+
+      const card = document.getElementById(`page-${pageIdx}`);
+      if (card) {
+        document.querySelectorAll('.page-card').forEach(c => c.classList.remove('highlight'));
+        card.classList.add('highlight');
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      if (bbox && bbox.x0 != null && bbox.y0 != null && bbox.x1 != null && bbox.y1 != null) {
+        const body = card && card.querySelector('.page-body');
+        const overlay = body && body.querySelector('.page-overlay');
+        const img = body && body.querySelector('.page-img');
+        if (overlay && img && img.naturalWidth) {
+          const w = img.naturalWidth;
+          const h = img.naturalHeight;
+          const el = document.createElement('div');
+          el.className = 'external-focus-rect';
+          el.style.left = (bbox.x0 * w) + 'px';
+          el.style.top = (bbox.y0 * h) + 'px';
+          el.style.width = Math.max(8, (bbox.x1 - bbox.x0) * w) + 'px';
+          el.style.height = Math.max(8, (bbox.y1 - bbox.y0) * h) + 'px';
+          overlay.appendChild(el);
+        }
+      }
+
+      if (article && String(article).trim()) {
+        searchInput.disabled = false;
+        searchInput.value = article.trim();
+        doSearch();
+        if (matches.length > 0) goToMatch(0);
+      }
     }
 
     function escapeHtml(s) {
@@ -450,6 +516,29 @@
     });
     prevBtn.addEventListener('click', () => goToMatch(currentMatchIndex - 1));
     nextBtn.addEventListener('click', () => goToMatch(currentMatchIndex + 1));
+
+    (async function initFromToken() {
+      const token = new URLSearchParams(window.location.search).get('token');
+      if (!token) return;
+      content.classList.add('loading');
+      content.innerHTML = '<div class="empty-state loading-msg"><p>OCR 결과 불러오는 중…</p></div>';
+      try {
+        const res = await fetch('/api/session/' + encodeURIComponent(token));
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          const msg = typeof err.detail === 'string' ? err.detail : (res.statusText || '오류');
+          throw new Error(msg);
+        }
+        const session = await res.json();
+        data = { pages: session.pages || [] };
+        window.__pendingNavHint = session.navigate || null;
+        content.classList.remove('loading');
+        render();
+      } catch (err) {
+        content.classList.remove('loading');
+        content.innerHTML = '<div class="empty-state"><p class="lead">세션을 불러올 수 없습니다</p><p>' + (err.message || String(err)) + '</p></div>';
+      }
+    })();
   </script>
 </body>
 </html>
