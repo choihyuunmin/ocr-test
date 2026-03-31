@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import tempfile
 import time
@@ -11,6 +12,7 @@ import uuid
 from pathlib import Path
 from threading import Lock
 from typing import Any, Optional
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -39,6 +41,8 @@ _SESSIONS: dict[str, tuple[dict[str, Any], float]] = {}
 TTL_SEC = 3600
 _MAX_PDF_BYTES = int(os.environ.get("OCR_TEST_MAX_PDF_BYTES", str(80 * 1024 * 1024)))
 
+logger = logging.getLogger("uvicorn.error")
+
 
 def _clean_expired() -> None:
     now = time.time()
@@ -56,6 +60,26 @@ def _absolutize_pdf_url(url: str) -> str:
     if u.startswith("/"):
         return f"{base}{u}"
     return f"{base}/pdfs/{u}"
+
+
+def _remap_pdf_url_for_server_fetch(url: str) -> str:
+    origin = (os.environ.get("OCR_TEST_MOLEG_PDFS_ORIGIN") or "").strip().rstrip("/")
+    if not origin:
+        return url
+    if "://" not in origin:
+        origin = "http://" + origin
+    try:
+        p = urlparse(url)
+        if not p.path.startswith("/pdfs"):
+            return url
+        bo = urlparse(origin)
+        scheme = bo.scheme or "http"
+        netloc = bo.netloc
+        if not netloc:
+            return url
+        return urlunparse((scheme, netloc, p.path, p.params, p.query, p.fragment))
+    except Exception:
+        return url
 
 
 class BBox(BaseModel):
@@ -141,13 +165,28 @@ async def api_navigate(body: NavigateIn):
     if not pdf_url:
         raise HTTPException(400, "pdf_url(또는 /pdfs/… 상대 경로)이 필요합니다.")
 
+    fetch_url = _remap_pdf_url_for_server_fetch(pdf_url)
+    if fetch_url != pdf_url:
+        logger.info("navigate pdf_url remapped %r -> %r", pdf_url, fetch_url)
+
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
-            r = await client.get(pdf_url)
+            r = await client.get(fetch_url)
             r.raise_for_status()
             buf = r.content
     except httpx.HTTPError as e:
-        raise HTTPException(502, f"PDF를 가져올 수 없습니다: {e!s}") from e
+        logger.warning(
+            "navigate PDF fetch failed url=%r fetch_url=%r error=%s",
+            pdf_url,
+            fetch_url,
+            e,
+        )
+        raise HTTPException(
+            502,
+            f"PDF를 가져올 수 없습니다: {e!s} (요청 URL: {fetch_url!r}, "
+            "ocr-test 서버에서 접근 가능한 주소인지 확인. "
+            "다른 호스트면 OCR_TEST_MOLEG_PDFS_ORIGIN=http://<moleg-app>:18000 설정)",
+        ) from e
 
     if len(buf) > _MAX_PDF_BYTES:
         raise HTTPException(413, "PDF 용량이 제한을 초과했습니다.")
