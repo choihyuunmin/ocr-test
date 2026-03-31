@@ -276,7 +276,19 @@ function goToMatch(idx) {
   if (card) {
     document.querySelectorAll('.page-card').forEach(c => c.classList.remove('highlight'));
     card.classList.add('highlight');
-    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const allActive = card.querySelectorAll('.word-box.match-active');
+    if (allActive.length > 0) {
+      const boxes = Array.from(allActive);
+      boxes.sort((a, b) => {
+        const aTop = parseFloat(a.style.top || '0');
+        const bTop = parseFloat(b.style.top || '0');
+        if (Math.abs(aTop - bTop) > 5) return aTop - bTop;
+        return parseFloat(a.style.left || '0') - parseFloat(b.style.left || '0');
+      });
+      boxes[0].scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+    } else {
+      card.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+    }
   }
   matchBadge.className = 'match-badge has-results';
   matchBadge.innerHTML =
