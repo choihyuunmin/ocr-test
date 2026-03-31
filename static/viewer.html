@@ -588,22 +588,36 @@
         .replace(/[\s\u00ad\u034f\u115f\u1160\u17db\u180e\u2800\u3164]+/g, '');
     }
 
-    /** 같은 줄 대역 내에서 위→아래, 왼→오 정렬 */
+    /**
+     * 칼럼 내 x 좌표가 비슷한 블록들을 그룹화 → 각 그룹 내에서 위→아래 정렬.
+     * 같은 문단의 여러 줄이 연속으로 이어지도록 함.
+     */
     function sortItemsReadingOrder(texts, items) {
       if (items.length === 0) return [];
-      const heights = items.map((it) => {
-        const b = texts[it.i].bbox;
-        return b[3] - b[1];
-      }).sort((a, b) => a - b);
-      const medH = heights[Math.floor(heights.length / 2)] || 12;
-      const yBand = Math.max(10, medH * 0.45);
-      items.sort((a, b) => {
-        const la = Math.round(a.ymid / yBand);
-        const lb = Math.round(b.ymid / yBand);
-        if (la !== lb) return la - lb;
-        return a.x1 - b.x1;
-      });
-      return items.map((it) => it.i);
+      
+      const byX = [...items].sort((a, b) => a.x1 - b.x1);
+      const xGroups = [];
+      let currentGroup = [byX[0]];
+      const avgW = items.reduce((sum, it) => sum + (it.x2 - it.x1), 0) / items.length;
+      const xTol = Math.max(15, avgW * 0.3);
+      
+      for (let i = 1; i < byX.length; i++) {
+        const prev = currentGroup[currentGroup.length - 1];
+        if (Math.abs(byX[i].x1 - prev.x1) <= xTol) {
+          currentGroup.push(byX[i]);
+        } else {
+          xGroups.push(currentGroup);
+          currentGroup = [byX[i]];
+        }
+      }
+      if (currentGroup.length > 0) xGroups.push(currentGroup);
+      
+      const result = [];
+      for (const grp of xGroups) {
+        grp.sort((a, b) => a.ymid - b.ymid);
+        result.push(...grp.map((it) => it.i));
+      }
+      return result;
     }
 
     /**
@@ -728,7 +742,11 @@
     }
 
     function goToMatch(idx) {
-      if (idx < 0 || idx >= matches.length) return;
+      if (matches.length === 0) return;
+      
+      if (idx < 0) idx = matches.length - 1;
+      else if (idx >= matches.length) idx = 0;
+      
       currentMatchIndex = idx;
       const m = matches[idx];
 
@@ -736,6 +754,7 @@
       const indices = m.textIndices && m.textIndices.length
         ? m.textIndices
         : (m.textIdx >= 0 ? [m.textIdx] : []);
+      
       indices.forEach((ti) => {
         const activeBox = document.querySelector(
           `.word-box[data-page="${m.pageIdx}"][data-text-idx="${ti}"]`
@@ -747,13 +766,22 @@
       if (card) {
         document.querySelectorAll('.page-card').forEach(c => c.classList.remove('highlight'));
         card.classList.add('highlight');
-        const firstActive = card.querySelector('.word-box.match-active');
-        if (firstActive) {
-          firstActive.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        
+        const allActive = card.querySelectorAll('.word-box.match-active');
+        if (allActive.length > 0) {
+          const boxes = Array.from(allActive);
+          boxes.sort((a, b) => {
+            const aTop = parseFloat(a.style.top || 0);
+            const bTop = parseFloat(b.style.top || 0);
+            if (Math.abs(aTop - bTop) > 5) return aTop - bTop;
+            return parseFloat(a.style.left || 0) - parseFloat(b.style.left || 0);
+          });
+          boxes[0].scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
         } else {
           card.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }
+      
       matchBadge.className = 'match-badge has-results';
       matchBadge.innerHTML =
         '<span>' + (idx + 1) + '</span><span class="sep">/</span><span>' + matches.length + '</span>';
