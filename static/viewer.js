@@ -172,8 +172,23 @@ function sortColumnReadingOrder(texts, columnItems) {
 }
 
 /**
- * x 중심 간격이 가장 큰 지점으로 좌·우 칼럼을 나눈 뒤, 칼럼마다 순서를 붙임.
- * 단일 칼럼이면 gap 임계값 미만으로 전체를 한 번에 정렬.
+ * splitX 기준으로 좌·우로 나눈 뒤 칼럼마다 읽기 순서. 양쪽에 박스가 충분할 때만 사용.
+ */
+function trySplitAtX(texts, items, splitX, pageW) {
+  const left = items.filter((it) => it.xmid < splitX);
+  const right = items.filter((it) => it.xmid >= splitX);
+  const minEach = Math.max(2, Math.ceil(items.length * 0.06));
+  const wideEnough = pageW >= 280;
+  if (!wideEnough || left.length < minEach || right.length < minEach) {
+    return null;
+  }
+  return [...sortColumnReadingOrder(texts, left), ...sortColumnReadingOrder(texts, right)];
+}
+
+/**
+ * 1) x 중심 간격이 큰 지점으로 좌·우 분리 (요구 간격을 비교적 작게)
+ * 2) 실패 시 페이지 세로 중앙선(pageW/2)으로 분리 시도
+ * 3) 그래도 안 되면 단일 칼럼
  */
 function readingOrderTextIndices(page) {
   const texts = page.texts || [];
@@ -194,7 +209,7 @@ function readingOrderTextIndices(page) {
   if (items.length === 0) return [];
 
   const pageW = page.width || Math.max(0, ...items.map((it) => it.x2)) || 800;
-  const minColGap = Math.max(24, pageW * 0.045);
+  const minColGap = Math.max(18, pageW * 0.03);
   const byX = [...items].sort((a, b) => a.xmid - b.xmid);
   let bestGap = 0;
   let splitJ = -1;
@@ -205,13 +220,15 @@ function readingOrderTextIndices(page) {
       splitJ = j;
     }
   }
-  if (bestGap < minColGap || splitJ < 0) {
-    return sortColumnReadingOrder(texts, items);
+  if (bestGap >= minColGap && splitJ >= 0) {
+    const splitX = (byX[splitJ].xmid + byX[splitJ + 1].xmid) / 2;
+    const left = items.filter((it) => it.xmid < splitX);
+    const right = items.filter((it) => it.xmid >= splitX);
+    return [...sortColumnReadingOrder(texts, left), ...sortColumnReadingOrder(texts, right)];
   }
-  const splitX = (byX[splitJ].xmid + byX[splitJ + 1].xmid) / 2;
-  const left = items.filter((it) => it.xmid < splitX);
-  const right = items.filter((it) => it.xmid >= splitX);
-  return [...sortColumnReadingOrder(texts, left), ...sortColumnReadingOrder(texts, right)];
+  const mid = trySplitAtX(texts, items, pageW * 0.5, pageW);
+  if (mid) return mid;
+  return sortColumnReadingOrder(texts, items);
 }
 
 function buildPageConcatNorm(page, order) {
