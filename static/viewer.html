@@ -258,6 +258,25 @@
       background: transparent;
       border-radius: 3px;
       transition: opacity 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+      pointer-events: auto;
+      -webkit-user-select: text;
+      user-select: text;
+      cursor: text;
+    }
+    /* 이미지 위 OCR 텍스트 드래그 선택 (시각적으로는 이미지와 동일하게 보임) */
+    .word-box-text {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: transparent;
+      overflow: hidden;
+      white-space: nowrap;
+      line-height: 1;
+      -webkit-user-select: text;
+      user-select: text;
     }
     .word-box.dim { opacity: 0.22; }
     .word-box.match {
@@ -363,8 +382,12 @@
           const b = t.bbox;
           if (!b || b.length < 4) return '';
           const [x1, y1, x2, y2] = b;
+          const h = y2 - y1;
+          const fs = Math.max(6, Math.round(h * 0.72));
           return `<div class="word-box" data-page="${i}" data-text-idx="${textIdx}" data-text="${escapeHtml(t.text)}" 
-            style="left:${x1}px;top:${y1}px;width:${x2-x1}px;height:${y2-y1}px"></div>`;
+            style="left:${x1}px;top:${y1}px;width:${x2-x1}px;height:${h}px">
+            <span class="word-box-text" style="font-size:${fs}px">${escapeHtml(t.text)}</span>
+          </div>`;
         }).join('');
         return `
           <div class="page-card" id="page-${i}" data-page-index="${i}">
@@ -464,6 +487,53 @@
       return String(s).toLowerCase().replace(/\s+/g, '');
     }
 
+    /** bbox 기준 읽기 순서(위→아래, 같은 줄은 왼→오) */
+    function readingOrderTextIndices(page) {
+      const texts = page.texts || [];
+      const items = [];
+      for (let i = 0; i < texts.length; i++) {
+        const b = texts[i].bbox;
+        if (!b || b.length < 4) continue;
+        const ymid = (b[1] + b[3]) / 2;
+        items.push({ i, ymid, x1: b[0], h: b[3] - b[1] });
+      }
+      if (items.length === 0) return [];
+      const heights = items.map((it) => it.h).sort((a, b) => a - b);
+      const medH = heights[Math.floor(heights.length / 2)] || 12;
+      const yBand = Math.max(10, medH * 0.45);
+      items.sort((a, b) => {
+        const la = Math.round(a.ymid / yBand);
+        const lb = Math.round(b.ymid / yBand);
+        if (la !== lb) return la - lb;
+        return a.x1 - b.x1;
+      });
+      return items.map((it) => it.i);
+    }
+
+    /**
+     * 페이지 내 연속 OCR 단위를 공백 없이 이었을 때의 문자열과 구간.
+     * 여러 박스에 나뉜 문구도 하나의 검색어로 찾을 수 있음.
+     */
+    function buildPageConcatNorm(page, order) {
+      const texts = page.texts || [];
+      let full = '';
+      const segs = [];
+      for (const ti of order) {
+        const n = normalizeForSearch(texts[ti].text || '');
+        segs.push({ ti, start: full.length, end: full.length + n.length });
+        full += n;
+      }
+      return { fullNorm: full, segs };
+    }
+
+    function collectTextIndicesForRange(segs, hitStart, hitEnd) {
+      const out = [];
+      for (const s of segs) {
+        if (s.end > hitStart && s.start < hitEnd) out.push(s.ti);
+      }
+      return out;
+    }
+
     function doSearch() {
       const q = normalizeForSearch(searchInput.value);
       matches = [];
@@ -482,17 +552,30 @@
         return;
       }
 
+      const matchedKey = new Set();
+
       data.pages.forEach((page, pageIdx) => {
-        (page.texts || []).forEach((t, i) => {
-          if (normalizeForSearch(t.text).includes(q)) {
-            matches.push({ pageIdx, textIdx: i, text: t.text });
-          }
-        });
+        const order = readingOrderTextIndices(page);
+        const { fullNorm, segs } = buildPageConcatNorm(page, order);
+        let pos = 0;
+        while (pos <= fullNorm.length - q.length) {
+          const hit = fullNorm.indexOf(q, pos);
+          if (hit === -1) break;
+          const hitEnd = hit + q.length;
+          const textIndices = collectTextIndicesForRange(segs, hit, hitEnd);
+          const primary = textIndices.length ? textIndices[0] : -1;
+          const refText = primary >= 0 ? ((page.texts || [])[primary] || {}).text || '' : '';
+          matches.push({ pageIdx, textIndices, textIdx: primary, text: refText });
+          textIndices.forEach((ti) => matchedKey.add(`${pageIdx}:${ti}`));
+          pos = hit + q.length;
+        }
       });
 
       document.querySelectorAll('.word-box').forEach(box => {
-        const text = box.dataset.text || '';
-        if (normalizeForSearch(text).includes(q)) {
+        const page = box.dataset.page;
+        const tidx = box.dataset.textIdx;
+        const key = `${page}:${tidx}`;
+        if (matchedKey.has(key)) {
           box.classList.add('match');
         } else {
           box.classList.add('dim');
@@ -516,10 +599,15 @@
       const m = matches[idx];
 
       document.querySelectorAll('.word-box').forEach(b => b.classList.remove('match-active'));
-      const activeBox = document.querySelector(
-        `.word-box[data-page="${m.pageIdx}"][data-text-idx="${m.textIdx}"]`
-      );
-      if (activeBox) activeBox.classList.add('match-active');
+      const indices = m.textIndices && m.textIndices.length
+        ? m.textIndices
+        : (m.textIdx >= 0 ? [m.textIdx] : []);
+      indices.forEach((ti) => {
+        const activeBox = document.querySelector(
+          `.word-box[data-page="${m.pageIdx}"][data-text-idx="${ti}"]`
+        );
+        if (activeBox) activeBox.classList.add('match-active');
+      });
 
       const card = document.getElementById(`page-${m.pageIdx}`);
       if (card) {
