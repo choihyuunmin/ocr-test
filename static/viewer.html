@@ -65,25 +65,6 @@
       }
     }
 
-    .header-row-upload {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      flex-shrink: 0;
-    }
-
-    .file-input-wrap {
-      position: relative;
-      display: inline-block;
-    }
-    .file-input-wrap input[type="file"] {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
-      width: 100%;
-      height: 100%;
-      cursor: pointer;
-    }
     .btn {
       padding: 0.55rem 1rem;
       min-height: 2.5rem;
@@ -312,6 +293,13 @@
       font-weight: 600;
       color: var(--text);
     }
+    .empty-state code {
+      font-size: 0.88em;
+      background: #f1f5f9;
+      padding: 0.12em 0.4em;
+      border-radius: 0.25rem;
+      border: 1px solid var(--border);
+    }
     .loading { opacity: 0.65; pointer-events: none; }
     .loading-msg { color: var(--accent); }
     .external-focus-rect {
@@ -327,12 +315,6 @@
 </head>
 <body>
   <header class="header">
-    <div class="header-row-upload">
-      <div class="file-input-wrap">
-        <button class="btn" id="uploadBtn" type="button">PDF 업로드</button>
-        <input type="file" id="fileInput" accept=".pdf" aria-label="PDF 파일 선택">
-      </div>
-    </div>
     <div class="search-panel" id="searchPanel" role="search">
       <span class="search-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
@@ -351,8 +333,8 @@
 
   <main class="content" id="content">
     <div class="empty-state">
-      <p class="lead">PDF를 업로드하면 OCR 결과가 여기에 표시됩니다.</p>
-      <p>검색어를 입력하면 일치하는 단어가 강조되고, 화살표 버튼으로 순서대로 이동할 수 있습니다.</p>
+      <p class="lead">문서가 없습니다.</p>
+      <p>앱에서 연 세션 링크(<code>?token=…</code>)로 열면 OCR 결과가 표시됩니다. 검색어를 입력하면 일치하는 단어가 강조됩니다.</p>
     </div>
   </main>
 
@@ -361,43 +343,11 @@
     let matches = [];
     let currentMatchIndex = -1;
 
-    const uploadBtn = document.getElementById('uploadBtn');
-    const fileInput = document.getElementById('fileInput');
     const searchInput = document.getElementById('searchInput');
     const prevBtn = document.getElementById('prevBtn');
     const nextBtn = document.getElementById('nextBtn');
     const matchBadge = document.getElementById('matchBadge');
     const content = document.getElementById('content');
-
-    uploadBtn.addEventListener('click', () => fileInput.click());
-
-    fileInput.addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      content.classList.add('loading');
-      content.innerHTML = '<div class="empty-state loading-msg"><p>OCR 처리 중...</p></div>';
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-        const res = await fetch('/api/ocr', {
-          method: 'POST',
-          body: formData,
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          const msg = Array.isArray(err.detail) ? err.detail[0]?.msg : err.detail;
-          throw new Error(msg || res.statusText || 'OCR 처리 실패');
-        }
-        data = await res.json();
-        content.classList.remove('loading');
-        render();
-        searchInput.disabled = false;
-      } catch (err) {
-        content.classList.remove('loading');
-        content.innerHTML = `<div class="empty-state"><p>오류: ${err.message}</p></div>`;
-      }
-      fileInput.value = '';
-    });
 
     function render() {
       if (!data?.pages?.length) {
@@ -425,6 +375,8 @@
             </div>
           </div>`;
       }).join('');
+
+      searchInput.disabled = false;
 
       const finishNavHint = () => {
         const hint = window.__pendingNavHint;
