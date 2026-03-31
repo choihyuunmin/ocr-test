@@ -459,8 +459,13 @@
       return d.innerHTML.replace(/"/g, '&quot;');
     }
 
+    /** 검색 비교용: 공백 제거 + 대소문자 무시. 화면 표시 문자열은 건드리지 않음. */
+    function normalizeForSearch(s) {
+      return String(s).toLowerCase().replace(/\s+/g, '');
+    }
+
     function doSearch() {
-      const q = searchInput.value.trim().toLowerCase();
+      const q = normalizeForSearch(searchInput.value);
       matches = [];
       currentMatchIndex = -1;
 
@@ -479,7 +484,7 @@
 
       data.pages.forEach((page, pageIdx) => {
         (page.texts || []).forEach((t, i) => {
-          if (t.text.toLowerCase().includes(q)) {
+          if (normalizeForSearch(t.text).includes(q)) {
             matches.push({ pageIdx, textIdx: i, text: t.text });
           }
         });
@@ -487,7 +492,7 @@
 
       document.querySelectorAll('.word-box').forEach(box => {
         const text = box.dataset.text || '';
-        if (text.toLowerCase().includes(q)) {
+        if (normalizeForSearch(text).includes(q)) {
           box.classList.add('match');
         } else {
           box.classList.add('dim');
