@@ -152,16 +152,13 @@ function normalizeForSearch(s) {
     .replace(/[\s\u00ad\u034f\u115f\u1160\u17db\u180e\u2800\u3164]+/g, '');
 }
 
-function readingOrderTextIndices(page) {
-  const texts = page.texts || [];
-  const items = [];
-  for (let i = 0; i < texts.length; i++) {
-    const b = texts[i].bbox;
-    if (!b || b.length < 4) continue;
-    const ymid = (b[1] + b[3]) / 2;
-    items.push({ i, ymid, x1: b[0], h: b[3] - b[1] });
-  }
-  if (items.length === 0) return [];
+/**
+ * 한 칼럼 안에서만 위→아래, 같은 줄은 왼→오.
+ * (전역 y→x 정렬은 이중어에서 같은 줄의 영어가 한글 줄 사이에 끼어 줄바꿈 검색이 깨짐)
+ */
+function sortColumnReadingOrder(texts, columnItems) {
+  if (columnItems.length === 0) return [];
+  const items = columnItems.slice();
   const heights = items.map((it) => it.h).sort((a, b) => a - b);
   const medH = heights[Math.floor(heights.length / 2)] || 12;
   const yBand = Math.max(10, medH * 0.45);
@@ -172,6 +169,49 @@ function readingOrderTextIndices(page) {
     return a.x1 - b.x1;
   });
   return items.map((it) => it.i);
+}
+
+/**
+ * x 중심 간격이 가장 큰 지점으로 좌·우 칼럼을 나눈 뒤, 칼럼마다 순서를 붙임.
+ * 단일 칼럼이면 gap 임계값 미만으로 전체를 한 번에 정렬.
+ */
+function readingOrderTextIndices(page) {
+  const texts = page.texts || [];
+  const items = [];
+  for (let i = 0; i < texts.length; i++) {
+    const b = texts[i].bbox;
+    if (!b || b.length < 4) continue;
+    const ymid = (b[1] + b[3]) / 2;
+    items.push({
+      i,
+      ymid,
+      x1: b[0],
+      x2: b[2],
+      xmid: (b[0] + b[2]) / 2,
+      h: b[3] - b[1],
+    });
+  }
+  if (items.length === 0) return [];
+
+  const pageW = page.width || Math.max(0, ...items.map((it) => it.x2)) || 800;
+  const minColGap = Math.max(24, pageW * 0.045);
+  const byX = [...items].sort((a, b) => a.xmid - b.xmid);
+  let bestGap = 0;
+  let splitJ = -1;
+  for (let j = 0; j < byX.length - 1; j++) {
+    const g = byX[j + 1].xmid - byX[j].xmid;
+    if (g > bestGap) {
+      bestGap = g;
+      splitJ = j;
+    }
+  }
+  if (bestGap < minColGap || splitJ < 0) {
+    return sortColumnReadingOrder(texts, items);
+  }
+  const splitX = (byX[splitJ].xmid + byX[splitJ + 1].xmid) / 2;
+  const left = items.filter((it) => it.xmid < splitX);
+  const right = items.filter((it) => it.xmid >= splitX);
+  return [...sortColumnReadingOrder(texts, left), ...sortColumnReadingOrder(texts, right)];
 }
 
 function buildPageConcatNorm(page, order) {
