@@ -368,7 +368,8 @@ nextBtn.addEventListener('click', () => goToMatch(currentMatchIndex + 1));
   content.classList.add('loading');
   content.innerHTML = '<div class="empty-state loading-msg"><p>OCR 결과 불러오는 중…</p></div>';
   try {
-    const res = await fetch('/api/session/' + encodeURIComponent(token));
+    // 루트 절대경로(/api/…)는 /ocr-test 하위에서 검색 앱 /api 로 가서 500·세션 없음이 난다. 현재 경로 기준 상대 URL 사용.
+    const res = await fetch('api/session/' + encodeURIComponent(token));
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       const msg = typeof err.detail === 'string' ? err.detail : (res.statusText || '오류');
