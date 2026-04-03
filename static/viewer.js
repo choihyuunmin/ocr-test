@@ -8,7 +8,6 @@ const nextBtn = document.getElementById('nextBtn');
 const matchBadge = document.getElementById('matchBadge');
 const content = document.getElementById('content');
 
-/** /ocr-test?token= 처럼 끝 슬래시가 없으면 상대 `api/…`가 루트 `/api`로 가므로 pathname 기준으로 조합 */
 function sessionFetchUrl(token) {
   let p = window.location.pathname.replace(/\/+$/, '');
   const base = p ? p + '/' : '/';
