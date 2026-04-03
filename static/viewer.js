@@ -8,6 +8,13 @@ const nextBtn = document.getElementById('nextBtn');
 const matchBadge = document.getElementById('matchBadge');
 const content = document.getElementById('content');
 
+/** /ocr-test?token= 처럼 끝 슬래시가 없으면 상대 `api/…`가 루트 `/api`로 가므로 pathname 기준으로 조합 */
+function sessionFetchUrl(token) {
+  let p = window.location.pathname.replace(/\/+$/, '');
+  const base = p ? p + '/' : '/';
+  return base + 'api/session/' + encodeURIComponent(token);
+}
+
 function render() {
   if (!data?.pages?.length) {
     content.innerHTML = '<div class="empty-state"><p>유효한 OCR 데이터가 없습니다.</p></div>';
@@ -368,8 +375,7 @@ nextBtn.addEventListener('click', () => goToMatch(currentMatchIndex + 1));
   content.classList.add('loading');
   content.innerHTML = '<div class="empty-state loading-msg"><p>OCR 결과 불러오는 중…</p></div>';
   try {
-    // 루트 절대경로(/api/…)는 /ocr-test 하위에서 검색 앱 /api 로 가서 500·세션 없음이 난다. 현재 경로 기준 상대 URL 사용.
-    const res = await fetch('api/session/' + encodeURIComponent(token));
+    const res = await fetch(sessionFetchUrl(token));
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       const msg = typeof err.detail === 'string' ? err.detail : (res.statusText || '오류');
